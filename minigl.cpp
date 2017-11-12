@@ -24,6 +24,8 @@
 #include <vector>
 #include <cstdio>
 
+#include <stack>
+
 using namespace std;
 
 /**
@@ -69,11 +71,31 @@ struct Triangle {
 
     // get Barycentric coordinates
     vec3 get_Bary(vec3 point) {
+        vec3 x = v2.pos.remove_last_dim()-v1.pos.remove_last_dim();
+        vec3 y = v3.pos.remove_last_dim()-v1.pos.remove_last_dim();
+        vec3 z = point-v1.pos.remove_last_dim();
         MGLfloat a,b,c,area_tri; // alpha, beta, gamma and area of full triangle
-        area_tri = area(v1.pos.remove_last_dim(),v2.pos.remove_last_dim(),v3.pos.remove_last_dim());
-        a = area(point, v2.pos.remove_last_dim(),v3.pos.remove_last_dim()) / area_tri;
-        b = area(v1.pos.remove_last_dim(), point,v3.pos.remove_last_dim()) / area_tri;
-        c = 1.0f - a - b;
+        // Use of Cramer's Rule for beta and gamma since point-alpha = beta * (b-a) + gamma * (c-a)
+        // From the slide 10 of "Triangles and Barycentric Coordinates"
+        area_tri = x[0] * y[1] - x[1] * y[0]; // det [xy] or vectors forming the triangle
+        b = z[0] * y[1] - z[1] * y[0]; // det [zy] 
+        c = x[0] * z[1] - x[1] * z[0]; // det [xz]
+        b /= area_tri; 
+        c /= area_tri; 
+        a = 1.0f - b - c;
+
+        // First try where I got the area's as all positive
+        /*area_tri = area(v1.pos.remove_last_dim(),v2.pos.remove_last_dim(),v3.pos.remove_last_dim());
+        a = area(point, v2.pos.remove_last_dim(),v3.pos.remove_last_dim());
+        b = area(v1.pos.remove_last_dim(), point,v3.pos.remove_last_dim());
+        c = area(point, v1.pos.remove_last_dim(),v2.pos.remove_last_dim());
+        
+        cout << "area alpha: " << a << ", area beta = " << b << ", area gamma = " << c << endl;
+
+        a /= area_tri;
+        b /= area_tri;
+        c /= area_tri;*/
+        //c = 1.0f - a - b;
 
         return vec<MGLfloat,3>(a,b,c);
     }
@@ -91,6 +113,37 @@ MGLpoly_mode draw_mode;
 // list of vertices and list of triangles
 vector<Vertex> vert_list;
 vector<Triangle> tri_list;
+
+// matrix structures
+MGLmatrix_mode matrix_mode;
+stack<mat4,vector<mat4> > projectionMatrices;
+stack<mat4,vector<mat4> > modelviewMatrices;
+
+// helper function to access current/active matrix
+stack<mat4,vector<mat4> > * getCurrentStack() {
+    stack<mat4,vector<mat4> > *value = NULL;
+    switch(matrix_mode) {
+        case MGL_MODELVIEW:
+            value = &modelviewMatrices;
+            break;
+        case MGL_PROJECTION:
+            value = &projectionMatrices;
+            break;
+    }
+    
+    // check if empty
+    if (value->empty()) {
+        mat4 matrix;
+        matrix.make_zero();
+        matrix(0,0) = 1;
+        matrix(1,1) = 1;
+        matrix(2,2) = 1;
+        matrix(3,3) = 1;
+        value->push(matrix);
+    }
+
+    return value;
+}
 
 /**
  * Standard macro to report errors
@@ -120,8 +173,8 @@ void mglReadPixels(MGLsize width,
     Vertex v1, v2, v3;
     MGLfloat xmin, xmax, ymin, ymax;
 
-    cout << "width: " << width << endl;
-    cout << "height: " << height << endl;
+    // cout << "width: " << width << endl;
+    // cout << "height: " << height << endl;
 
     for (unsigned tri = 0; tri < tri_list.size(); tri++) {
         curr_triangle = tri_list.at(tri);
@@ -137,10 +190,9 @@ void mglReadPixels(MGLsize width,
         v3.pos[0] = (width * (v3.pos[0] + 1)) / 2;
         v3.pos[1] = (height * (v3.pos[1] + 1)) / 2;
 
-        // draw vertices to check
-        cout << curr_triangle.v1.pos[0] << ", " << curr_triangle.v1.pos[1] << ", " << curr_triangle.v1.pos[2] << ", " << curr_triangle.v1.pos[3] << endl;
-        cout << curr_triangle.v2.pos[0] << ", " << curr_triangle.v2.pos[1] << ", " << curr_triangle.v2.pos[2] << ", " << curr_triangle.v2.pos[3] << endl;
-        cout << curr_triangle.v3.pos[0] << ", " << curr_triangle.v3.pos[1] << ", " << curr_triangle.v3.pos[2] << ", " << curr_triangle.v3.pos[3] << endl;
+        // cout << curr_triangle.v1.pos[0] << ", " << curr_triangle.v1.pos[1] << ", " << curr_triangle.v1.pos[2] << ", " << curr_triangle.v1.pos[3] << endl;
+        // cout << curr_triangle.v2.pos[0] << ", " << curr_triangle.v2.pos[1] << ", " << curr_triangle.v2.pos[2] << ", " << curr_triangle.v2.pos[3] << endl;
+        // cout << curr_triangle.v3.pos[0] << ", " << curr_triangle.v3.pos[1] << ", " << curr_triangle.v3.pos[2] << ", " << curr_triangle.v3.pos[3] << endl;
 
         // bounded box of triangle
         xmin = x_min(v1,v2,v3);
@@ -159,8 +211,6 @@ void mglReadPixels(MGLsize width,
         vec3 proj_pt, bary, color; // projected point to its plane,  barycentric coords, and interpolated color
         for (MGLint i = xmin; i <= xmax; i++) {
             for (MGLint j = ymin; j <= ymax; j++) {
-                data[width*j + i] = Make_Pixel(120,120,120);
-                
                 // i,j --> proj_pt in obj space
                 proj_pt = vec<MGLfloat,3>( (((2 *(MGLfloat)i) + 1) / width) - 1,
                         (((2 *(MGLfloat)j) + 1) / height) - 1 , 0);
@@ -170,23 +220,17 @@ void mglReadPixels(MGLsize width,
                 if (denom < 1e-6) continue;
 
                 proj_pt[2] = dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) / normal[2];
-
-                //cout << "pix: " << i << ", " << j << " -----> " << 
-                //    "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
-                
+ 
                 // now we got a point on the same plane as the triangle
                 // start barycentric stuff
-                //proj_pt = curr_triangle.v1.pos.remove_last_dim();
                 bary = curr_triangle.get_Bary(proj_pt);
                 
+                //cout << "pix: " << i << ", " << j << " -----> " << 
+                //    "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
                 //cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
                 
                 if (bary[0] >= 0 && bary[1] >= 0 && bary[2] >= 0) {
                     // cout << "int" << endl;
-                    cout << "pix: " << i << ", " << j << " -----> " << 
-                        "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
-                    cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
-                    
                     color = bary[0] * v1.col + bary[1] * v2.col + bary[2] * v3.col;
                     data[width*j + i] = Make_Pixel(color[0], color[1], color[2]);
                     data[width*j + i] = Make_Pixel(255,255,255);
@@ -241,6 +285,14 @@ void mglVertex2(MGLfloat x,
                 MGLfloat y)
 {
     vec4 pos = vec<MGLfloat,4>(x,y,0,1);
+
+    if (!modelviewMatrices.empty()){
+        pos = modelviewMatrices.top() * pos;
+    }
+    if (!projectionMatrices.empty()) {
+        pos = projectionMatrices.top() * pos;
+    }
+
     vec3 col = curr_col;
     vert_list.push_back(Vertex(pos, col));
 }
@@ -254,6 +306,14 @@ void mglVertex3(MGLfloat x,
                 MGLfloat z)
 {
     vec4 pos = vec<MGLfloat,4>(x,y,z,1);
+    
+    if (!modelviewMatrices.empty()){
+        pos = modelviewMatrices.top() * pos;
+    }
+    if (!projectionMatrices.empty()) {
+        pos = projectionMatrices.top() * pos;
+    }
+    
     vec3 col = curr_col; 
     vert_list.push_back(Vertex(pos,col));
 }
@@ -263,6 +323,7 @@ void mglVertex3(MGLfloat x,
  */
 void mglMatrixMode(MGLmatrix_mode mode)
 {
+    matrix_mode = mode;
 }
 
 /**
@@ -286,6 +347,12 @@ void mglPopMatrix()
  */
 void mglLoadIdentity()
 {
+    mat4 matrix;
+    matrix.make_zero();
+    for (unsigned i = 0; i < 4; i++) {
+        matrix(i,i) = 1;
+    }
+    getCurrentStack()->top() = matrix;
 }
 
 /**
@@ -302,6 +369,13 @@ void mglLoadIdentity()
  */
 void mglLoadMatrix(const MGLfloat *matrix)
 {
+    mat4 top = getCurrentStack()->top();
+    int m = top.rows();
+    int n = top.cols();
+    for (int i = 0; i < m*n; i++) {
+        top(i/n,i%n) = matrix[i];
+    }
+    getCurrentStack()->top() = top;
 }
 
 /**
@@ -318,6 +392,14 @@ void mglLoadMatrix(const MGLfloat *matrix)
  */
 void mglMultMatrix(const MGLfloat *matrix)
 {
+    mat4 top = getCurrentStack()->top();
+    mat4 m1;
+    int m = top.rows();
+    int n = top.cols();
+    for (int i = 0; i < m*n; i++) {
+        m1(i/n,i%n) = matrix[i];
+    }
+    getCurrentStack()->top() = top * m1;
 }
 
 /**
@@ -328,6 +410,17 @@ void mglTranslate(MGLfloat x,
                   MGLfloat y,
                   MGLfloat z)
 {
+    mat4 matrix;
+    matrix.make_zero();
+    matrix(0,0) = 1;
+    matrix(1,1) = 1;
+    matrix(2,2) = 1;
+    matrix(3,3) = 1;
+    matrix(3,0) = x;
+    matrix(3,1) = y;
+    matrix(3,2) = z;
+
+    mglMultMatrix(matrix.values);
 }
 
 /**
@@ -340,6 +433,30 @@ void mglRotate(MGLfloat angle,
                MGLfloat y,
                MGLfloat z)
 {
+    // first normalze the rotation vector
+    vec3 xyz = vec<MGLfloat,3>(x,y,z);
+    mat4 matrix;
+    MGLfloat c,s;
+
+    xyz = xyz.normalized();
+    x = xyz[0], y = xyz[1], z = xyz[2];
+    angle = (M_PI * angle) / 180.0f;
+    c = cos(angle); // cosine of angle
+    s = sin(angle); // sine of angle
+    
+    // build matrix to multiply with (right to left, then down)
+    matrix.make_zero();
+    matrix(0,0) = x*x*(1-c) + c; 
+    matrix(1,0) = x*y*(1-c) - z*s;
+    matrix(2,0) = x*z*(1-c) + y*s;
+    matrix(0,1) = y*z*(1-c) + z*s;
+    matrix(1,1) = y*y*(1-c) + c;
+    matrix(2,1) = y*z*(1-c) - x*s;
+    matrix(0,2) = x*z*(1-c) - y*s;
+    matrix(1,2) = y*z*(1-c) + x*s;
+    matrix(2,2) = z*z*(1-c) + c;
+
+    mglMultMatrix(matrix.values);
 }
 
 /**
@@ -350,6 +467,13 @@ void mglScale(MGLfloat x,
               MGLfloat y,
               MGLfloat z)
 {
+    mat4 matrix;
+    matrix.make_zero();
+    matrix(0,0) = x;
+    matrix(1,1) = y;
+    matrix(2,2) = z;
+    matrix(3,3) = 1.0f;
+    mglMultMatrix(matrix.values);
 }
 
 /**
@@ -363,6 +487,17 @@ void mglFrustum(MGLfloat left,
                 MGLfloat near,
                 MGLfloat far)
 {
+    mat4 matrix;
+    matrix.make_zero();
+    MGLfloat rl = right - left, tb = top - bottom, fn = far - near;
+    matrix(0,0) = 2.0f * near / rl;
+    matrix(1,1) = 2.0f * near / tb;
+    matrix(2,2) = -(far + near) / fn;
+    matrix(2,0) = (right + left) / rl;
+    matrix(2,1) = (top + bottom) / tb;
+    matrix(2,3) = -1.0f;
+    matrix(3,2) = -(2.0f * far * near) / fn;
+    mglMultMatrix(matrix.values);
 }
 
 /**
@@ -376,6 +511,18 @@ void mglOrtho(MGLfloat left,
               MGLfloat near,
               MGLfloat far)
 {
+    mat4 matrix;
+    matrix.make_zero();
+    MGLfloat rl = right - left, tb = top - bottom, fn = far - near;
+    matrix(0,0) = 2.0f / rl;
+    matrix(1,1) = 2.0f / tb;
+    matrix(2,2) = 2.0f / fn;
+    matrix(3,3) = 1.0f;
+    matrix(3,0) = -(right + left) / rl;
+    matrix(3,1) = -(top + bottom) / tb;
+    matrix(3,2) = -(far + near) / fn;
+    
+    mglMultMatrix(matrix.values);
 }
 
 /**
