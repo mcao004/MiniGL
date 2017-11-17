@@ -60,20 +60,29 @@ struct Triangle {
     
     // normal
     vec3 normal() {
-        vec3 u1 = v2.pos.remove_last_dim()-v1.pos.remove_last_dim();
-        vec3 u2 = v3.pos.remove_last_dim()-v1.pos.remove_last_dim();
+        vec4 v1_pos = this->v1.pos / this->v1.pos[3];
+        vec4 v2_pos = this->v2.pos / this->v2.pos[3];
+        vec4 v3_pos = this->v3.pos / this->v3.pos[3];
+        
+        vec3 u1 = v2_pos.remove_last_dim()-v1_pos.remove_last_dim();
+        vec3 u2 = v3_pos.remove_last_dim()-v1_pos.remove_last_dim();
 
-        return vec<MGLfloat,3>(
+        vec3 value = vec<MGLfloat,3>(
                 u1[1]*u2[2] - u1[2]*u2[1],
                 u1[2]*u2[0] - u1[0]*u2[2],
                 u1[0]*u2[1] - u1[1]*u2[0]);
+        return value.normalized();
     }
 
     // get Barycentric coordinates
     vec3 get_Bary(vec3 point) {
-        vec3 x = v2.pos.remove_last_dim()-v1.pos.remove_last_dim();
-        vec3 y = v3.pos.remove_last_dim()-v1.pos.remove_last_dim();
-        vec3 z = point-v1.pos.remove_last_dim();
+        vec4 v1_pos = this->v1.pos / this->v1.pos[3];
+        vec4 v2_pos = this->v2.pos / this->v2.pos[3];
+        vec4 v3_pos = this->v3.pos / this->v3.pos[3];
+        
+        vec3 x = v2_pos.remove_last_dim()-v1_pos.remove_last_dim();
+        vec3 y = v3_pos.remove_last_dim()-v1_pos.remove_last_dim();
+        vec3 z = point-v1_pos.remove_last_dim();
         MGLfloat a,b,c,area_tri; // alpha, beta, gamma and area of full triangle
         // Use of Cramer's Rule for beta and gamma since point-alpha = beta * (b-a) + gamma * (c-a)
         // From the slide 10 of "Triangles and Barycentric Coordinates"
@@ -181,6 +190,15 @@ void mglReadPixels(MGLsize width,
         v1 = curr_triangle.v1;
         v2 = curr_triangle.v2;
         v3 = curr_triangle.v3;
+
+        // perspective division
+        v1.pos /= v1.pos[3];
+        v2.pos /= v2.pos[3];
+        v3.pos /= v3.pos[3];
+
+        // cout << v1.pos[0] << ", " << v1.pos[1] << ", " << v1.pos[2] << ", " << v1.pos[3] << endl;
+        // cout << v2.pos[0] << ", " << v2.pos[1] << ", " << v2.pos[2] << ", " << v2.pos[3] << endl;
+        // cout << v3.pos[0] << ", " << v3.pos[1] << ", " << v3.pos[2] << ", " << v3.pos[3] << endl;
         
         // transform the curr_triangle's vertices to screen space in v1,v2,v3
         v1.pos[0] = (width * (v1.pos[0] + 1)) / 2;
@@ -195,15 +213,26 @@ void mglReadPixels(MGLsize width,
         // cout << curr_triangle.v3.pos[0] << ", " << curr_triangle.v3.pos[1] << ", " << curr_triangle.v3.pos[2] << ", " << curr_triangle.v3.pos[3] << endl;
 
         // bounded box of triangle
-        xmin = x_min(v1,v2,v3);
-        xmax = x_max(v1,v2,v3);
-        ymin = y_min(v1,v2,v3);
-        ymax = y_max(v1,v2,v3);
+        xmin = max(0.0f,x_min(v1,v2,v3)); // shouldn't be lower than 0
+        xmax = min((MGLfloat)width, x_max(v1,v2,v3)); // no greater than width
+        ymin = max(0.0f,y_min(v1,v2,v3)); // shouldn't be lower than 0
+        ymax = min((MGLfloat)height, y_max(v1,v2,v3)); // no greater than height
+
+        // after found bounds retake the vertices from triangle
+        v1 = curr_triangle.v1;
+        v2 = curr_triangle.v2;
+        v3 = curr_triangle.v3;
+
+        // perspective division
+        v1.pos /= v1.pos[3];
+        v2.pos /= v2.pos[3];
+        v3.pos /= v3.pos[3];
+
 
         // vertice test
-        data[(MGLint)(floor(v1.pos[0]) + width * floor(v1.pos[1]))] = Make_Pixel(255,255,255);
-        data[(MGLint)(floor(v2.pos[0]) + width * floor(v2.pos[1]))] = Make_Pixel(255,255,255);
-        data[(MGLint)(floor(v3.pos[0]) + width * floor(v3.pos[1]))] = Make_Pixel(255,255,255);
+        // data[(MGLint)(floor(v1.pos[0]) + width * floor(v1.pos[1]))] = Make_Pixel(255,255,255);
+        // data[(MGLint)(floor(v2.pos[0]) + width * floor(v2.pos[1]))] = Make_Pixel(255,255,255);
+        // data[(MGLint)(floor(v3.pos[0]) + width * floor(v3.pos[1]))] = Make_Pixel(255,255,255);
         
         // for each i and j in bounded box, move back to obj space and check if hits triangle
         MGLfloat denom;
@@ -216,10 +245,15 @@ void mglReadPixels(MGLsize width,
                         (((2 *(MGLfloat)j) + 1) / height) - 1 , 0);
 
                 // if inside current triangle
-                denom = dot(normal,vec<MGLfloat,3>(0,0,3));
+                denom = dot(normal,vec<MGLfloat,3>(0,0,1));
                 if (denom < 1e-6) continue;
-
-                proj_pt[2] = dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) / normal[2];
+                
+                /*cout << "v1: " << v1.pos << endl;
+                cout << "proj_pt: " << proj_pt << endl;
+                cout << "v1-proj_tr: " << vec3(v1.pos.remove_last_dim() - proj_pt) << endl;
+                cout << "dot(v1-proj_pt),normal) = " << dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) << endl;
+                cout << denom << endl;*/
+                proj_pt[2] = dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) / denom;
  
                 // now we got a point on the same plane as the triangle
                 // start barycentric stuff
@@ -230,13 +264,33 @@ void mglReadPixels(MGLsize width,
                 //cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
                 
                 if (bary[0] >= 0 && bary[1] >= 0 && bary[2] >= 0) {
-                    // cout << "int" << endl;
-                    color = bary[0] * v1.col + bary[1] * v2.col + bary[2] * v3.col;
+                    if (tri == 1 && proj_pt[0] <= -.5){
+                        //cout << "pix: " << i << ", " << j << " -----> " << 
+                        //    "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
+                        //cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
+                        //cout << endl;
+                    }
+
+                    color = bary[0] * 255 * curr_triangle.v1.col + bary[1] * 255 * curr_triangle.v2.col + bary[2] * 255 * curr_triangle.v3.col;
+                    //cout << "Color: " << color << endl;
                     data[width*j + i] = Make_Pixel(color[0], color[1], color[2]);
-                    data[width*j + i] = Make_Pixel(255,255,255);
+                    //data[width*j + i] = Make_Pixel(255,255,255);
                 }
             }
         }
+        // info
+        /*
+        cout << curr_triangle.v1.pos << endl;
+        // cout << curr_triangle.v1.col << endl;
+        cout << curr_triangle.v2.pos << endl;
+        // cout << curr_triangle.v2.col << endl;
+        cout << curr_triangle.v3.pos << endl;
+        // cout << curr_triangle.v3.col << endl;
+        */
+
+        /*cout << "width: " << width << ", height " << height << endl;
+        cout << "ymin: " << ymin << ", ymax: " << ymax << endl;
+        cout << "xmin: " << xmin << ", xmax: " << xmax << endl;*/
 
 
     }
@@ -273,6 +327,7 @@ void mglEnd()
             }
             break;
     }
+    vert_list.clear();
 }
 
 /**
@@ -290,7 +345,10 @@ void mglVertex2(MGLfloat x,
         pos = modelviewMatrices.top() * pos;
     }
     if (!projectionMatrices.empty()) {
+        // cout << "Init pos:\t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
+        // cout << "Projection Mat:\t" << projectionMatrices.top() << endl;
         pos = projectionMatrices.top() * pos;
+        // cout << "after pos: \t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
     }
 
     vec3 col = curr_col;
@@ -311,7 +369,10 @@ void mglVertex3(MGLfloat x,
         pos = modelviewMatrices.top() * pos;
     }
     if (!projectionMatrices.empty()) {
+        // cout << "Init pos:\t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
+        // cout << "Projection Mat:\t" << projectionMatrices.top() << endl;
         pos = projectionMatrices.top() * pos;
+        // cout << "after pos: \t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
     }
     
     vec3 col = curr_col; 
@@ -332,6 +393,7 @@ void mglMatrixMode(MGLmatrix_mode mode)
  */
 void mglPushMatrix()
 {
+    getCurrentStack()->push(mat4(getCurrentStack()->top()));
 }
 
 /**
@@ -340,6 +402,7 @@ void mglPushMatrix()
  */
 void mglPopMatrix()
 {
+    getCurrentStack()->pop();
 }
 
 /**
@@ -449,12 +512,13 @@ void mglRotate(MGLfloat angle,
     matrix(0,0) = x*x*(1-c) + c; 
     matrix(1,0) = x*y*(1-c) - z*s;
     matrix(2,0) = x*z*(1-c) + y*s;
-    matrix(0,1) = y*z*(1-c) + z*s;
+    matrix(0,1) = y*x*(1-c) + z*s;
     matrix(1,1) = y*y*(1-c) + c;
     matrix(2,1) = y*z*(1-c) - x*s;
     matrix(0,2) = x*z*(1-c) - y*s;
     matrix(1,2) = y*z*(1-c) + x*s;
     matrix(2,2) = z*z*(1-c) + c;
+    matrix(3,3) = 1;
 
     mglMultMatrix(matrix.values);
 }
@@ -516,7 +580,7 @@ void mglOrtho(MGLfloat left,
     MGLfloat rl = right - left, tb = top - bottom, fn = far - near;
     matrix(0,0) = 2.0f / rl;
     matrix(1,1) = 2.0f / tb;
-    matrix(2,2) = 2.0f / fn;
+    matrix(2,2) = -2.0f / fn;
     matrix(3,3) = 1.0f;
     matrix(3,0) = -(right + left) / rl;
     matrix(3,1) = -(top + bottom) / tb;
