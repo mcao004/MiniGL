@@ -98,14 +98,13 @@ struct Triangle {
         a = area(point, v2.pos.remove_last_dim(),v3.pos.remove_last_dim());
         b = area(v1.pos.remove_last_dim(), point,v3.pos.remove_last_dim());
         c = area(point, v1.pos.remove_last_dim(),v2.pos.remove_last_dim());
-        
-        cout << "area alpha: " << a << ", area beta = " << b << ", area gamma = " << c << endl;
 
         a /= area_tri;
         b /= area_tri;
         c /= area_tri;*/
         //c = 1.0f - a - b;
-
+        
+        
         return vec<MGLfloat,3>(a,b,c);
     }
 };
@@ -174,22 +173,21 @@ inline void MGL_ERROR(const char* description) {
  * with the actual pixel values that should be displayed on
  * the two-dimensional screen.
  */
+MGLfloat *zbuffer = NULL;
+
 void mglReadPixels(MGLsize width,
                    MGLsize height,
                    MGLpixel *data)
 {
     Triangle curr_triangle;
     Vertex v1, v2, v3;
-    MGLfloat xmin, xmax, ymin, ymax;
+    MGLfloat xmin, xmax, ymin, ymax, all;
     
     // z-buffer
-    MGLfloat zbuffer[width*height];
+    zbuffer = new MGLfloat[width*height];
     for (unsigned i = 0; i < width*height; ++i) {
         zbuffer[i] = 2.0f;
     }
-
-    // cout << "width: " << width << endl;
-    // cout << "height: " << height << endl;
 
     for (unsigned tri = 0; tri < tri_list.size(); tri++) {
         curr_triangle = tri_list.at(tri);
@@ -201,10 +199,6 @@ void mglReadPixels(MGLsize width,
         v1.pos /= v1.pos[3];
         v2.pos /= v2.pos[3];
         v3.pos /= v3.pos[3];
-
-        // cout << v1.pos[0] << ", " << v1.pos[1] << ", " << v1.pos[2] << ", " << v1.pos[3] << endl;
-        // cout << v2.pos[0] << ", " << v2.pos[1] << ", " << v2.pos[2] << ", " << v2.pos[3] << endl;
-        // cout << v3.pos[0] << ", " << v3.pos[1] << ", " << v3.pos[2] << ", " << v3.pos[3] << endl;
         
         // transform the curr_triangle's vertices to screen space in v1,v2,v3
         v1.pos[0] = (width * (v1.pos[0] + 1)) / 2;
@@ -214,20 +208,11 @@ void mglReadPixels(MGLsize width,
         v3.pos[0] = (width * (v3.pos[0] + 1)) / 2;
         v3.pos[1] = (height * (v3.pos[1] + 1)) / 2;
 
-        // cout << v1.pos[0] << ", " << v1.pos[1] << ", " << v1.pos[2] << ", " << v1.pos[3] << endl;
-        // cout << v2.pos[0] << ", " << v2.pos[1] << ", " << v2.pos[2] << ", " << v2.pos[3] << endl;
-        // cout << v3.pos[0] << ", " << v3.pos[1] << ", " << v3.pos[2] << ", " << v3.pos[3] << endl;
-
         // bounded box of triangle
         xmin = max(0.0f,x_min(v1,v2,v3)); // shouldn't be lower than 0
-        xmax = min((MGLfloat)width, x_max(v1,v2,v3)); // no greater than width
+        xmax = min((MGLfloat)(width-1), x_max(v1,v2,v3)); // no greater than width
         ymin = max(0.0f,y_min(v1,v2,v3)); // shouldn't be lower than 0
-        ymax = min((MGLfloat)height, y_max(v1,v2,v3)); // no greater than height
-        // cout << "xmin: " << xmin << endl;
-        // cout << "xmax: " << xmax << endl;
-        // cout << "ymin: " << ymin << endl;
-        // cout << "ymax: " << ymax << endl;
-        // cout << endl;
+        ymax = min((MGLfloat)(height-1), y_max(v1,v2,v3)); // no greater than height
 
         // after found bounds retake the vertices from triangle
         v1 = curr_triangle.v1;
@@ -240,8 +225,6 @@ void mglReadPixels(MGLsize width,
         v3.pos /= v3.pos[3];
         
         // for each i and j in bounded box, move back to obj space and check if hits triangle
-        MGLfloat denom;
-        vec3 normal = curr_triangle.normal(); // normal of triangle
         vec3 proj_pt, bary, color; // projected point to its plane,  barycentric coords, and interpolated color
         for (MGLint i = xmin; i <= xmax; i++) {
             for (MGLint j = ymin; j <= ymax; j++) {
@@ -249,64 +232,38 @@ void mglReadPixels(MGLsize width,
                 proj_pt = vec<MGLfloat,3>( (((2 *(MGLfloat)i) + 1) / width) - 1,
                         (((2 *(MGLfloat)j) + 1) / height) - 1 , 0);
 
-                // if inside current triangle
-                denom = dot(normal,vec<MGLfloat,3>(0,0,1));
-                if (abs(denom) < 1e-6) continue;
+                // start barycentric stuff
+                bary = curr_triangle.get_Bary(proj_pt);
                 
-                /*
-                cout << "v1: " << v1.pos << endl;
-                cout << "proj_pt: " << proj_pt << endl;
-                cout << "v1-proj_tr: " << vec3(v1.pos.remove_last_dim() - proj_pt) << endl;
-                cout << "dot(v1-proj_pt),normal) = " << dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) << endl;
-                cout << denom << endl;
-                */
+                
+                proj_pt[2] = bary[0] * v1.pos[2] + bary[1] * v2.pos[2] + bary[2] * v3.pos[2];
 
-                proj_pt[2] = dot(vec3(v1.pos.remove_last_dim() - proj_pt), normal) / denom;
+                // perspective correct
+                bary[0] /= curr_triangle.v1.pos[3];
+                bary[1] /= curr_triangle.v2.pos[3];
+                bary[2] /= curr_triangle.v3.pos[3];
+                all = bary[0] + bary[1] + bary[2];
+                bary[0] /= all;
+                bary[1] /= all;
+                bary[2] /= all;
+
 
                 if (proj_pt[2] < -1.0f || proj_pt[2] > 1.0f || proj_pt[2] > zbuffer[width*j + i]) {
                     continue;
                 }
- 
-                // now we got a point on the same plane as the triangle
-                // start barycentric stuff
-                bary = curr_triangle.get_Bary(proj_pt);
                 
-                //cout << "pix: " << i << ", " << j << " -----> " << 
-                //    "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
-                //cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
-                
+                // if inside the triangle
                 if (bary[0] >= 0 && bary[1] >= 0 && bary[2] >= 0) {
-                    //if (tri == 1 && proj_pt[0] <= -.5){
-                        //cout << "pix: " << i << ", " << j << " -----> " << 
-                        //    "proj_pt: " << proj_pt[0] << ", " << proj_pt[1] << ", " << proj_pt[2] << endl;
-                        //cout << "Bary: " << bary[0] << ", " << bary[1] << ", " << bary[2] << endl;
-                        //cout << endl;
-                    //}
 
-                    color = bary[0] * 255.0f * curr_triangle.v1.col + bary[1] * 255.0f * curr_triangle.v2.col + bary[2] * 255.0f * curr_triangle.v3.col;
-                    //cout << "Color: " << color << endl;
+                    color = (bary[0] * 255.0f) * curr_triangle.v1.col + bary[1] * 255.0f * curr_triangle.v2.col + bary[2] * 255.0f * curr_triangle.v3.col;
                     data[width*j + i] = Make_Pixel(color[0], color[1], color[2]);
                     //data[width*j + i] = Make_Pixel(255,255,255);
                     zbuffer[width*j + i] = proj_pt[2];
                 }
             }
         }
-        // info
-        /*
-        cout << curr_triangle.v1.pos << endl;
-        // cout << curr_triangle.v1.col << endl;
-        cout << curr_triangle.v2.pos << endl;
-        // cout << curr_triangle.v2.col << endl;
-        cout << curr_triangle.v3.pos << endl;
-        // cout << curr_triangle.v3.col << endl;
-        */
-
-        /*cout << "width: " << width << ", height " << height << endl;
-        cout << "ymin: " << ymin << ", ymax: " << ymax << endl;
-        cout << "xmin: " << xmin << ", xmax: " << xmax << endl;*/
-
-
     }
+    delete [] zbuffer;
 }
 
 /**
@@ -355,16 +312,10 @@ void mglVertex2(MGLfloat x,
     vec4 pos = vec<MGLfloat,4>(x,y,0,1);
 
     if (!modelviewMatrices.empty()){
-         cout << "Init pos:\t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
-         cout << "Modelview Mat:\t" << modelviewMatrices.top() << endl;
         pos = modelviewMatrices.top() * pos;
-         cout << "after pos: \t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
     }
     if (!projectionMatrices.empty()) {
-         cout << "Init pos:\t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
-         cout << "Projection Mat:\t" << projectionMatrices.top() << endl;
         pos = projectionMatrices.top() * pos;
-         cout << "after pos: \t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
     }
     cout << endl;
 
@@ -386,10 +337,7 @@ void mglVertex3(MGLfloat x,
         pos = modelviewMatrices.top() * pos;
     }
     if (!projectionMatrices.empty()) {
-        // cout << "Init pos:\t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
-        // cout << "Projection Mat:\t" << projectionMatrices.top() << endl;
         pos = projectionMatrices.top() * pos;
-        // cout << "after pos: \t" << pos[0] << ", " << pos[1] << ", " << pos[2] << ", " << pos[3] << endl;
     }
     
     vec3 col = curr_col; 
@@ -453,9 +401,6 @@ void mglLoadMatrix(const MGLfloat *matrix)
     for (int i = 0; i < 16; i++) {
         m1.values[i] = *(matrix+i);
     }
-    /*for (int i = 0; i < m*n; i++) {
-        top(i/n,i%n) = matrix[i];
-    }*/
     getCurrentStack()->top() = m1;
 }
 
@@ -605,13 +550,6 @@ void mglOrtho(MGLfloat left,
     matrix(1,3) = -(top + bottom) / tb;
     matrix(2,3) = -(far + near) / fn;
     
-    cout << "Ortho: " << matrix << endl;
-    for (int i = 0 ; i < 16; i++) {
-        cout << matrix.values[i] << ", ";
-    }cout << endl;
-
-    cout << endl;
-
     mglMultMatrix(matrix.values);
 }
 
